@@ -1,14 +1,22 @@
-// Main bot file
-// Sends messages with minimal permissions. If the bot has Manage Messages, it will use the placeholder reply+delete trick.
-// Otherwise it will just send the message directly (only requires Send Messages) and work in DMs and guilds.
+// Main bot file with diagnostics to help debug WebSocket connection failures.
+// Adds token verification and shard/gateway event logging.
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, PermissionsBitField, REST, Routes } = require('discord.js');
 
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
   console.error('Missing DISCORD_TOKEN in environment.');
   process.exit(1);
 }
+
+// Verify token before attempting to login (helps surface 401 early)
+const rest = new REST({ version: '10' }).setToken(token);
+rest.get(Routes.user())
+  .then(u => console.log(`Token verified for ${u.username} (${u.id})`))
+  .catch(err => {
+    console.error('Token verification failed:', err && err.message ? err.message : err);
+    process.exit(1);
+  });
 
 const client = new Client({
   intents: [
@@ -26,6 +34,24 @@ const handleReady = () => {
 };
 client.on('ready', handleReady);
 client.on('clientReady', handleReady);
+
+// Shard / gateway diagnostics
+client.on('shardError', (error) => console.error('Shard error:', error));
+client.on('shardDisconnect', (closeEvent, shardId) => console.warn('Shard disconnected:', { shardId, closeEvent }));
+client.on('shardReconnecting', (shardId) => console.log('Shard reconnecting:', shardId));
+client.on('rateLimit', (info) => console.warn('Rate limit:', info));
+client.on('debug', (msg) => console.debug('DEBUG:', msg));
+
+// WebSocket errors (best-effort)
+try {
+  if (client.ws) {
+    client.ws.on('error', err => console.error('WebSocket error:', err));
+    client.ws.on('close', (code, reason) => console.warn('WebSocket closed:', { code, reason }));
+    client.ws.on('open', () => console.log('WebSocket opened'));
+  }
+} catch (e) {
+  console.warn('Failed to attach ws listeners:', e && e.message ? e.message : e);
+}
 
 client.on('interactionCreate', async (interaction) => {
   try {
@@ -64,23 +90,32 @@ client.on('interactionCreate', async (interaction) => {
         // Placeholder + reply + delete (original behavior when Manage Messages is available)
         const placeholder = await channel.send('.');
         await placeholder.reply({ content: text });
-        await placeholder.delete();
+        // best-effort delete; don't fail the command if delete is not possible
+        try { await placeholder.delete(); } catch (delErr) { console.warn('Failed to delete placeholder:', delErr && delErr.message ? delErr.message : delErr); }
       } else {
-        // Fallback: simply send the user's message directly. This only requires Send Messages permission and works in DMs and guilds.
+        // Fallback: send the message directly (works in DMs and channels where bot can send)
         await channel.send(text);
       }
 
       await interaction.editReply({ content: 'Message sent.' });
     } catch (err) {
       console.error('Error sending message in /say command:', err);
+      // Provide a helpful error to the user (without leaking internals)
       await interaction.editReply('Failed to send message. I might be missing permissions in that channel.');
     }
   } catch (outerErr) {
     console.error('Unexpected error handling interaction:', outerErr);
-    try { if (interaction.deferred || interaction.replied) await interaction.editReply('An unexpected error occurred.'); } catch (e) { /* ignore */ }
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply('An unexpected error occurred.');
+      }
+    } catch (e) { /* ignore */ }
   }
 });
 
-client.on('error', console.error);
+client.on('error', (err) => console.error('Client error:', err));
 
-client.login(token);
+client.login(token).catch(err => {
+  console.error('Login failed:', err && err.message ? err.message : err);
+  process.exit(1);
+});
