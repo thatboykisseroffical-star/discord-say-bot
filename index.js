@@ -1,5 +1,6 @@
 // Main bot file
-// Handles discord.js v15 deprecation by listening for both 'ready' and 'clientReady'
+// Sends messages with minimal permissions. If the bot has Manage Messages, it will use the placeholder reply+delete trick.
+// Otherwise it will just send the message directly (only requires Send Messages) and work in DMs and guilds.
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require('discord.js');
 
@@ -17,22 +18,21 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-// Support both the current 'ready' event and the upcoming 'clientReady' event to avoid
-// the deprecation warning and to be compatible with discord.js v15.
 let readyHandled = false;
 const handleReady = () => {
   if (readyHandled) return;
   readyHandled = true;
   console.log(`Logged in as ${client.user.tag}`);
 };
-
 client.on('ready', handleReady);
 client.on('clientReady', handleReady);
 
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
+  try {
+    if (!interaction.isChatInputCommand()) return;
 
-  if (interaction.commandName === 'say') {
+    if (interaction.commandName !== 'say') return;
+
     const text = interaction.options.getString('message', true);
 
     // Defer reply so the command doesn't time out; keep this ephemeral for privacy.
@@ -44,34 +44,40 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    // Permission checks
-    const me = interaction.guild?.members?.me;
-    if (me) {
-      const missing = [];
-      if (!me.permissionsIn(channel).has(PermissionsBitField.Flags.SendMessages)) missing.push('Send Messages');
-      if (!me.permissionsIn(channel).has(PermissionsBitField.Flags.ManageMessages)) missing.push('Manage Messages (required to delete placeholder)');
-      if (missing.length) {
-        await interaction.editReply(`I need these permissions in this channel: ${missing.join(', ')}`);
+    // In DMs, interaction.guild is null and permissions are not applicable.
+    const isDm = !interaction.guild;
+
+    // Check Send Messages permission in guild channels
+    if (!isDm) {
+      const me = interaction.guild?.members?.me;
+      if (me && !me.permissionsIn(channel).has(PermissionsBitField.Flags.SendMessages)) {
+        await interaction.editReply('I do not have permission to send messages in that channel.');
         return;
       }
     }
 
+    // If bot has ManageMessages we can use the placeholder trick (reply to a placeholder then delete it)
+    const canManage = !isDm && interaction.guild?.members?.me?.permissionsIn(channel).has(PermissionsBitField.Flags.ManageMessages);
+
     try {
-      // 1) Send placeholder
-      const placeholder = await channel.send('.');
-
-      // 2) Reply to placeholder with the user's message
-      // Use message.reply to create a reply reference
-      await placeholder.reply({ content: text });
-
-      // 3) Delete the placeholder message - the reply will remain visible
-      await placeholder.delete();
+      if (canManage) {
+        // Placeholder + reply + delete (original behavior when Manage Messages is available)
+        const placeholder = await channel.send('.');
+        await placeholder.reply({ content: text });
+        await placeholder.delete();
+      } else {
+        // Fallback: simply send the user's message directly. This only requires Send Messages permission and works in DMs and guilds.
+        await channel.send(text);
+      }
 
       await interaction.editReply({ content: 'Message sent.' });
     } catch (err) {
-      console.error('Error in /say command:', err);
-      await interaction.editReply('Failed to send message. Ensure I have permission to send and delete messages.');
+      console.error('Error sending message in /say command:', err);
+      await interaction.editReply('Failed to send message. I might be missing permissions in that channel.');
     }
+  } catch (outerErr) {
+    console.error('Unexpected error handling interaction:', outerErr);
+    try { if (interaction.deferred || interaction.replied) await interaction.editReply('An unexpected error occurred.'); } catch (e) { /* ignore */ }
   }
 });
 
