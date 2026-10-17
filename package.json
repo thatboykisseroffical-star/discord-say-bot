@@ -1,0 +1,17 @@
+{
+  "name": "discord-say-bot",
+  "version": "1.0.0",
+  "description": "Discord bot with /say command that uses a temporary placeholder message.",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "register-commands": "node deploy-commands.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.11.0",
+    "dotenv": "^16.1.4"
+  }
+}
