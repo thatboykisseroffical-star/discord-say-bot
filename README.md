@@ -1,37 +1,32 @@
 # Discord "say" bot
 
-This bot provides a /say command that sends a placeholder message ("."), replies to that placeholder with your message, then deletes the placeholder — making the posted message appear "silent".
+This bot provides a few slash commands that send messages directly with minimal permissions.
 
-Quick overview:
-- Node 18+ recommended
-- Uses discord.js v14
-- Deploy with Railway (connect your GitHub repo to Railway and set environment variables)
+Commands:
+- /say message: Sends the provided message directly to the channel (no placeholder).
+- /uwuify message: Transforms text into a playful "uwu" style and sends it.
+- /furryaf message: Applies a playful "furry"-style transform and sends it.
 
-Environment variables (set these in Railway / GitHub Secrets / .env locally):
-- DISCORD_TOKEN — the bot token
-- CLIENT_ID — the Application (client) ID
-- GUILD_ID — optional. If provided the /say command will be registered to that guild immediately. If omitted the command will be registered globally (available in all servers) but global registration can take up to an hour to propagate.
+Design goals:
+- Only needs Send Messages permission in guild channels. In DMs no permissions needed.
+- No placeholder + delete behavior by default, so Manage Messages is not required.
 
-Files:
-- index.js — bot runtime
-- deploy-commands.js — register the /say command (guild during development or global if GUILD_ID omitted)
-- package.json — dependencies & start script
-- .gitignore
+Deployment notes:
+- Environment variables (Railway or local .env):
+  - DISCORD_TOKEN (required)
+  - CLIENT_ID (required for registering commands)
+  - GUILD_ID (optional; set for quick guild registration, omit for global)
 
-Usage:
-1. Create a Discord Application and Bot on the Discord Developer Portal.
-2. Copy CLIENT_ID and DISCORD_TOKEN.
-3. Invite the bot to a server with scopes `applications.commands` and `bot` and appropriate permissions (Send Messages, Manage Messages).
-   Example invite URL:
-   https://discord.com/oauth2/authorize?client_id=<CLIENT_ID>&permissions=268435456&scope=bot%20applications.commands
-   (Permission integer above includes Send Messages and Manage Messages — adjust if needed.)
-4. Push this repo to GitHub.
-5. Connect the GitHub repo to Railway and set environment variables: DISCORD_TOKEN, CLIENT_ID, and optionally GUILD_ID.
-6. Register the slash command:
-   - For development (fast): set GUILD_ID and run `npm run register-commands`.
-   - For global availability: set DISCORD_TOKEN and CLIENT_ID (omit GUILD_ID) and run `npm run register-commands`. Note: global commands can take up to an hour to appear in servers.
-7. Deploy on Railway with start command: `node index.js`.
+Register commands (local or Railway console):
+- npm install
+- npm run register-commands
+
+Start the bot:
+- npm start
+
+Invite URL example:
+https://discord.com/oauth2/authorize?client_id=<CLIENT_ID>&permissions=2048&scope=bot%20applications.commands
 
 Notes:
-- The bot needs the Manage Messages permission to delete the placeholder.
-- For production/global commands, omit GUILD_ID when running deploy-commands.js. Global registration may take up to an hour to propagate.
+- Permission integer 2048 is Send Messages only. If you want Manage Messages previously used, it is not required anymore.
+- Global command registration may take up to one hour to appear in servers. For immediate testing, set GUILD_ID and register to a dev server.

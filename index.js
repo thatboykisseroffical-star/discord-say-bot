@@ -1,5 +1,11 @@
-// Main bot file with diagnostics to help debug WebSocket connection failures.
-// Adds token verification and shard/gateway event logging.
+// Main bot file: simplified to only require Send Messages permission and no placeholder messages.
+// Adds three slash commands: /say, /uwuify, /furryaf.
+// Behavior:
+// - Always sends the transformed message directly to the channel (or DM) using channel.send()
+// - Requires only Send Messages permission in guild channels; in DMs no permission required
+// - Replies to the command user with an ephemeral acknowledgement
+// - Keeps basic diagnostics for login and token verification
+
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, PermissionsBitField, REST, Routes } = require('discord.js');
 
@@ -9,59 +15,74 @@ if (!token) {
   process.exit(1);
 }
 
-// Verify token before attempting to login (helps surface 401 early)
+// token verification (helpful diagnostic in logs)
 const rest = new REST({ version: '10' }).setToken(token);
-rest.get(Routes.user())
-  .then(u => console.log(`Token verified for ${u.username} (${u.id})`))
-  .catch(err => {
-    console.error('Token verification failed:', err && err.message ? err.message : err);
-    process.exit(1);
-  });
-
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages
-  ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
+rest.get(Routes.user()).then(u => console.log(`Token verified for ${u.username} (${u.id})`)).catch(err => {
+  console.error('Token verification failed:', err && err.message ? err.message : err);
+  process.exit(1);
 });
 
-let readyHandled = false;
-const handleReady = () => {
-  if (readyHandled) return;
-  readyHandled = true;
-  console.log(`Logged in as ${client.user.tag}`);
-};
-client.on('ready', handleReady);
-client.on('clientReady', handleReady);
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+  partials: [Partials.Message, Partials.Channel]
+});
 
-// Shard / gateway diagnostics
-client.on('shardError', (error) => console.error('Shard error:', error));
-client.on('shardDisconnect', (closeEvent, shardId) => console.warn('Shard disconnected:', { shardId, closeEvent }));
-client.on('shardReconnecting', (shardId) => console.log('Shard reconnecting:', shardId));
-client.on('rateLimit', (info) => console.warn('Rate limit:', info));
-client.on('debug', (msg) => console.debug('DEBUG:', msg));
+client.on('ready', () => console.log(`Logged in as ${client.user.tag}`));
+client.on('clientReady', () => console.log(`clientReady event (compat) - ${client.user?.tag}`));
+client.on('error', console.error);
 
-// WebSocket errors (best-effort)
-try {
-  if (client.ws) {
-    client.ws.on('error', err => console.error('WebSocket error:', err));
-    client.ws.on('close', (code, reason) => console.warn('WebSocket closed:', { code, reason }));
-    client.ws.on('open', () => console.log('WebSocket opened'));
-  }
-} catch (e) {
-  console.warn('Failed to attach ws listeners:', e && e.message ? e.message : e);
+// Simple text transforms
+function uwuify(text) {
+  // basic uwu transformation
+  let s = text;
+  // replace r/l with w
+  s = s.replace(/[rl]/g, 'w').replace(/[RL]/g, 'W');
+  // replace n't -> n'ty? skip
+  // add faces and stuttering occasionally
+  s = s.replace(/\!+/g, '! owo');
+  // replace you -> u
+  s = s.replace(/\byou\b/gi, 'u');
+  // add kawaii faces randomly after sentences (deterministic simple rule)
+  s = s.replace(/\.\s*|\?\s*|!\s*|\n/g, match => match + ' ');
+  // small chance of stutter at start of words
+  s = s.split(' ').map(word => {
+    if (word.length > 2 && Math.random() < 0.18) {
+      return word[0] + '-' + word;
+    }
+    return word;
+  }).join(' ');
+  // append an uwu face if none
+  if (!/uwu|owo|rawr/i.test(s)) s = s + ' uwu';
+  return s;
 }
 
+function furryify(text) {
+  // simple "furry" transformation: add ~ sounds, replace o with owo for cute affect
+  let s = text;
+  s = s.replace(/\byou\b/gi, 'u');
+  s = s.replace(/o/g, 'owo').replace(/O/g, 'OwO');
+  s = s.replace(/!+/g, '! *paws*');
+  // add playful suffixes and emojis
+  s = s.replace(/\.$/, ' :3');
+  // insert some animal-themed words randomly (deterministic approach: based on word length)
+  s = s.split(' ').map(w => {
+    if (w.length >= 6) return w + ' *purr*';
+    return w;
+  }).join(' ');
+  // add a signature
+  if (!/\*/.test(s)) s = s + ' \n~ fursona~';
+  return s;
+}
+
+// Handle interactions
 client.on('interactionCreate', async (interaction) => {
   try {
     if (!interaction.isChatInputCommand()) return;
 
-    if (interaction.commandName !== 'say') return;
-
+    const cmd = interaction.commandName;
     const text = interaction.options.getString('message', true);
 
-    // Defer reply so the command doesn't time out; keep this ephemeral for privacy.
+    // Defer ephemeral so user gets quick feedback
     await interaction.deferReply({ ephemeral: true });
 
     const channel = interaction.channel;
@@ -70,50 +91,35 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    // In DMs, interaction.guild is null and permissions are not applicable.
     const isDm = !interaction.guild;
 
-    // Check Send Messages permission in guild channels
+    // In guilds require only SendMessages permission
     if (!isDm) {
       const me = interaction.guild?.members?.me;
       if (me && !me.permissionsIn(channel).has(PermissionsBitField.Flags.SendMessages)) {
-        await interaction.editReply('I do not have permission to send messages in that channel.');
+        await interaction.editReply('I need permission to send messages in that channel (Send Messages).');
         return;
       }
     }
 
-    // If bot has ManageMessages we can use the placeholder trick (reply to a placeholder then delete it)
-    const canManage = !isDm && interaction.guild?.members?.me?.permissionsIn(channel).has(PermissionsBitField.Flags.ManageMessages);
-
-    try {
-      if (canManage) {
-        // Placeholder + reply + delete (original behavior when Manage Messages is available)
-        const placeholder = await channel.send('.');
-        await placeholder.reply({ content: text });
-        // best-effort delete; don't fail the command if delete is not possible
-        try { await placeholder.delete(); } catch (delErr) { console.warn('Failed to delete placeholder:', delErr && delErr.message ? delErr.message : delErr); }
-      } else {
-        // Fallback: send the message directly (works in DMs and channels where bot can send)
-        await channel.send(text);
-      }
-
-      await interaction.editReply({ content: 'Message sent.' });
-    } catch (err) {
-      console.error('Error sending message in /say command:', err);
-      // Provide a helpful error to the user (without leaking internals)
-      await interaction.editReply('Failed to send message. I might be missing permissions in that channel.');
+    let out = text;
+    if (cmd === 'say') {
+      out = text; // no placeholder, direct send
+    } else if (cmd === 'uwuify') {
+      out = uwuify(text);
+    } else if (cmd === 'furryaf') {
+      out = furryify(text);
     }
-  } catch (outerErr) {
-    console.error('Unexpected error handling interaction:', outerErr);
-    try {
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply('An unexpected error occurred.');
-      }
-    } catch (e) { /* ignore */ }
+
+    // Send directly. This will show the bot as the author (can't avoid that without webhooks or external permissions)
+    await channel.send(out);
+
+    await interaction.editReply({ content: 'Message sent.' });
+  } catch (err) {
+    console.error('Interaction error:', err);
+    try { await interaction.editReply('Failed to process command.'); } catch (e) { /* ignore */ }
   }
 });
-
-client.on('error', (err) => console.error('Client error:', err));
 
 client.login(token).catch(err => {
   console.error('Login failed:', err && err.message ? err.message : err);
