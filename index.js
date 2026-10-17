@@ -1,4 +1,5 @@
 // Main bot file
+// Handles discord.js v15 deprecation by listening for both 'ready' and 'clientReady'
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require('discord.js');
 
@@ -16,9 +17,17 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-client.once('ready', () => {
+// Support both the current 'ready' event and the upcoming 'clientReady' event to avoid
+// the deprecation warning and to be compatible with discord.js v15.
+let readyHandled = false;
+const handleReady = () => {
+  if (readyHandled) return;
+  readyHandled = true;
   console.log(`Logged in as ${client.user.tag}`);
-});
+};
+
+client.on('ready', handleReady);
+client.on('clientReady', handleReady);
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
